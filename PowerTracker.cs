@@ -42,9 +42,10 @@ namespace PowerTracker
         // Hover tracking
         private bool hoverRec = false, hoverGraph = false, hoverPos = false;
 
-        // Expand / collapse state
-        private bool isExpanded = false;
-        private Size compactSize = new Size(300, 62);
+        // Widget state: 0=collapsed, 1=normal, 2=expanded
+        private int widgetState = 1;
+        private Size collapsedSize = new Size(300, 8);
+        private Size normalSize = new Size(300, 62);
         private Size expandedSize = new Size(300, 110);
 
         // Blink timer for recording indicator
@@ -149,7 +150,24 @@ namespace PowerTracker
             // --- Subtle border ---
             using (Pen borderPen = new Pen(Color.FromArgb(55, 60, 75), 1.2f))
             {
-                DrawRoundedRect(g, borderPen, 0, 0, w - 1, h - 1, 12);
+                DrawRoundedRect(g, borderPen, 0, 0, w - 1, h - 1, 4);
+            }
+
+            // === COLLAPSED: just a thin accent strip ===
+            if (widgetState == 0)
+            {
+                Color barColor = isCharging ? Color.FromArgb(76, 175, 80) : Color.FromArgb(244, 67, 54);
+                if (isRecording)
+                {
+                    // Pulsing red strip when recording
+                    barColor = recDotVisible ? Color.FromArgb(244, 67, 54) : Color.FromArgb(180, 40, 30);
+                }
+                using (LinearGradientBrush barBrush = new LinearGradientBrush(
+                    new Point(0, 0), new Point(w, 0), barColor, Color.FromArgb(80, barColor)))
+                {
+                    g.FillRectangle(barBrush, 1, 1, w - 2, h - 2);
+                }
+                return; // Nothing else to draw
             }
 
             // --- Left accent: bolt icon (lights up when charging) ---
@@ -226,7 +244,7 @@ namespace PowerTracker
                 g.DrawString("LIVE", f, new SolidBrush(Color.FromArgb(33, 150, 243)), btnX + 16, graphY + 2);
 
             // === Expanded section ===
-            if (isExpanded)
+            if (widgetState == 2)
             {
                 int ey = 62;
                 // Separator line
@@ -414,6 +432,12 @@ namespace PowerTracker
         {
             if (e.Button == MouseButtons.Left)
             {
+                // If collapsed, click anywhere to restore
+                if (widgetState == 0)
+                {
+                    SetWidgetState(1);
+                    return;
+                }
                 if (rectRec.Contains(e.Location)) ToggleRecording();
                 else if (rectGraph.Contains(e.Location)) OpenLiveGraph();
                 else if (rectPos.Contains(e.Location)) ShowPositionMenu(e.Location);
@@ -424,8 +448,13 @@ namespace PowerTracker
         {
             ContextMenu posMenu = new ContextMenu();
 
-            string expandText = isExpanded ? "Collapse" : "Expand";
-            posMenu.MenuItems.Add(expandText, (s, ev) => ToggleExpand());
+            if (widgetState != 2)
+                posMenu.MenuItems.Add("Expand", (s, ev) => SetWidgetState(2));
+            if (widgetState != 1)
+                posMenu.MenuItems.Add("Normal", (s, ev) => SetWidgetState(1));
+            posMenu.MenuItems.Add("Collapse", (s, ev) => SetWidgetState(0));
+
+            posMenu.MenuItems.Add("-");
             posMenu.MenuItems.Add("Minimize to Tray", (s, ev) => { this.Visible = false; });
 
             string pinText = this.TopMost ? "Send to Back (Unpin)" : "Bring to Front (Pin)";
@@ -437,11 +466,14 @@ namespace PowerTracker
             posMenu.Show(this, loc);
         }
 
-        private void ToggleExpand()
+        private void SetWidgetState(int state)
         {
-            isExpanded = !isExpanded;
-            this.Size = isExpanded ? expandedSize : compactSize;
-            this.Region = CreateRoundedRegion(this.Width, this.Height, 12);
+            widgetState = state;
+            if (state == 0) this.Size = collapsedSize;
+            else if (state == 1) this.Size = normalSize;
+            else this.Size = expandedSize;
+            int radius = (state == 0) ? 4 : 12;
+            this.Region = CreateRoundedRegion(this.Width, this.Height, radius);
             this.Invalidate();
         }
 
