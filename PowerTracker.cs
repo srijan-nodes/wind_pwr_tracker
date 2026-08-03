@@ -11,7 +11,6 @@ namespace PowerTracker
 {
     public class Program : Form
     {
-        private Label lblIn, lblOut, lblNet, lblRec, lblViewGraph;
         private Timer timer;
         private ManagementObjectSearcher searcher;
         private NotifyIcon trayIcon;
@@ -19,7 +18,7 @@ namespace PowerTracker
 
         private double lastKnownDischargeRate = 12.0;
 
-        // Recording state & direct disk writer (No RAM session buffering!)
+        // Recording state & direct disk writer
         private bool isRecording = false;
         private StreamWriter recWriter = null;
 
@@ -31,68 +30,50 @@ namespace PowerTracker
         private Point dragCursorPoint;
         private Point dragFormPoint;
 
+        // Current telemetry values for painting
+        private double curIn = 0, curOut = 0, curNet = 0;
+
+        // Hit-test regions for clickable icons
+        private Rectangle rectRec = Rectangle.Empty;
+        private Rectangle rectGraph = Rectangle.Empty;
+
+        // Hover tracking
+        private bool hoverRec = false, hoverGraph = false;
+
+        // Blink timer for recording indicator
+        private Timer blinkTimer;
+        private bool recDotVisible = true;
+
         public Program()
         {
-            // --- Widget Window Config ---
             this.Text = "Power Widget";
-            this.Size = new Size(270, 52);
+            this.Size = new Size(300, 62);
             this.FormBorderStyle = FormBorderStyle.None;
             this.TopMost = true;
             this.ShowInTaskbar = false;
-            this.BackColor = Color.FromArgb(20, 20, 20);
-            this.Opacity = 0.90;
+            this.BackColor = Color.Black;
+            this.Opacity = 0.95;
             this.DoubleBuffered = true;
 
-            // Position at Bottom-Right of Screen
+            // Make form region a rounded rectangle
+            this.Region = CreateRoundedRegion(this.Width, this.Height, 12);
+            this.Resize += (s, e) => { this.Region = CreateRoundedRegion(this.Width, this.Height, 12); };
+
             Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
             this.Location = new Point(workingArea.Right - this.Width - 20, workingArea.Bottom - this.Height - 20);
 
-            // Dragging Handlers
             this.MouseDown += Form_MouseDown;
             this.MouseMove += Form_MouseMove;
             this.MouseUp += Form_MouseUp;
-
-            // --- UI Layout ---
-            Label hIn = CreateHeaderLabel("IN", 12, 8);
-            lblIn = CreateValueLabel("0.0W", 12, 22, Color.FromArgb(76, 175, 80));
-
-            Label hOut = CreateHeaderLabel("OUT", 78, 8);
-            lblOut = CreateValueLabel("0.0W", 78, 22, Color.FromArgb(244, 67, 54));
-
-            Label hNet = CreateHeaderLabel("NET", 144, 8);
-            lblNet = CreateValueLabel("0.0W", 144, 22, Color.FromArgb(33, 150, 243));
-
-            // REC Toggle Button Badge (Grey when idle, Red when recording)
-            lblRec = new Label {
-                Text = "● REC",
-                ForeColor = Color.Gray,
-                Location = new Point(204, 8),
-                AutoSize = true,
-                Visible = true,
-                Cursor = Cursors.Hand,
-                Font = new Font("Segoe UI", 7.5F, FontStyle.Bold)
-            };
-            lblRec.Click += (s, e) => ToggleRecording();
-
-            // View Graph Button Badge (Directly below Record button on widget)
-            lblViewGraph = new Label {
-                Text = "📈 GRAPH",
-                ForeColor = Color.FromArgb(33, 150, 243),
-                Location = new Point(204, 27),
-                AutoSize = true,
-                Visible = true,
-                Cursor = Cursors.Hand,
-                Font = new Font("Segoe UI", 7.5F, FontStyle.Bold)
-            };
-            lblViewGraph.Click += (s, e) => OpenLiveGraph();
+            this.MouseClick += Form_MouseClick;
 
             // --- Context Menu ---
             ContextMenu ctx = new ContextMenu();
-            itemRecord = new MenuItem("🔴 Start Recording", (s, e) => ToggleRecording());
+            itemRecord = new MenuItem("Start Recording", (s, e) => ToggleRecording());
             ctx.MenuItems.Add(itemRecord);
-            ctx.MenuItems.Add("📈 View Live Graph", (s, e) => OpenLiveGraph());
-            ctx.MenuItems.Add("📊 Open Saved CSV Graph...", (s, e) => OpenSavedCsvGraph());
-            ctx.MenuItems.Add("📁 Open Graphs Folder", (s, e) => OpenGraphsFolder());
+            ctx.MenuItems.Add("View Live Graph", (s, e) => OpenLiveGraph());
+            ctx.MenuItems.Add("Open Saved CSV Graph...", (s, e) => OpenSavedCsvGraph());
+            ctx.MenuItems.Add("Open Graphs Folder", (s, e) => OpenGraphsFolder());
             ctx.MenuItems.Add("-");
             ctx.MenuItems.Add("Toggle Widget", (s, e) => { this.Visible = !this.Visible; });
             ctx.MenuItems.Add("Snap to Corner", (s, e) => SnapToCorner());
@@ -109,8 +90,6 @@ namespace PowerTracker
             trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => { this.Visible = !this.Visible; };
 
-            this.Controls.AddRange(new Control[] { hIn, hOut, hNet, lblIn, lblOut, lblNet, lblRec, lblViewGraph });
-
             // Initialize WMI
             try
             {
@@ -124,37 +103,216 @@ namespace PowerTracker
             timer.Tick += UpdateTelemetry;
             timer.Start();
 
+            // Recording blink timer
+            blinkTimer = new Timer();
+            blinkTimer.Interval = 500;
+            blinkTimer.Tick += (s, e) => { recDotVisible = !recDotVisible; this.Invalidate(); };
+
             UpdateTelemetry(null, null);
         }
 
-        private Label CreateHeaderLabel(string text, int x, int y)
+        private static Region CreateRoundedRegion(int w, int h, int r)
         {
-            Label lbl = new Label {
-                Text = text,
-                ForeColor = Color.FromArgb(140, 140, 140),
-                Location = new Point(x, y),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 6.5F, FontStyle.Bold)
-            };
-            lbl.MouseDown += Form_MouseDown;
-            lbl.MouseMove += Form_MouseMove;
-            lbl.MouseUp += Form_MouseUp;
-            return lbl;
+            GraphicsPath path = new GraphicsPath();
+            path.AddArc(0, 0, r * 2, r * 2, 180, 90);
+            path.AddArc(w - r * 2, 0, r * 2, r * 2, 270, 90);
+            path.AddArc(w - r * 2, h - r * 2, r * 2, r * 2, 0, 90);
+            path.AddArc(0, h - r * 2, r * 2, r * 2, 90, 90);
+            path.CloseFigure();
+            return new Region(path);
         }
 
-        private Label CreateValueLabel(string text, int x, int y, Color color)
+        protected override void OnPaint(PaintEventArgs e)
         {
-            Label lbl = new Label {
-                Text = text,
-                ForeColor = color,
-                Location = new Point(x, y),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 10.5F, FontStyle.Bold)
+            base.OnPaint(e);
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+            int w = this.Width, h = this.Height;
+
+            // --- Background gradient ---
+            using (LinearGradientBrush bg = new LinearGradientBrush(
+                new Point(0, 0), new Point(w, h),
+                Color.FromArgb(24, 26, 32), Color.FromArgb(16, 17, 22)))
+            {
+                FillRoundedRect(g, bg, 0, 0, w, h, 12);
+            }
+
+            // --- Subtle border ---
+            using (Pen borderPen = new Pen(Color.FromArgb(55, 60, 75), 1.2f))
+            {
+                DrawRoundedRect(g, borderPen, 0, 0, w - 1, h - 1, 12);
+            }
+
+            // --- Left accent: tiny bolt icon ---
+            DrawBoltIcon(g, 8, 16, Color.FromArgb(255, 193, 7));
+
+            // === METRIC: Power IN ===
+            int col1X = 26;
+            DrawMetricBlock(g, col1X, "IN", String.Format("{0:F1}", curIn), "W",
+                Color.FromArgb(76, 175, 80), Color.FromArgb(40, 76, 175, 80));
+
+            // === METRIC: Power OUT ===
+            int col2X = 96;
+            DrawMetricBlock(g, col2X, "OUT", String.Format("{0:F1}", curOut), "W",
+                Color.FromArgb(244, 67, 54), Color.FromArgb(40, 244, 67, 54));
+
+            // === METRIC: Net Flow ===
+            int col3X = 170;
+            string netPrefix = curNet > 0 ? "+" : "";
+            Color netColor = curNet > 0 ? Color.FromArgb(76, 175, 80) : (curNet < 0 ? Color.FromArgb(244, 67, 54) : Color.FromArgb(150, 150, 160));
+            DrawMetricBlock(g, col3X, "NET", String.Format("{0}{1:F1}", netPrefix, curNet), "W",
+                netColor, Color.FromArgb(40, netColor));
+
+            // === Right side: REC button ===
+            int btnX = 244, recY = 8;
+            rectRec = new Rectangle(btnX - 4, recY - 2, 56, 22);
+
+            Color recBg = hoverRec ? Color.FromArgb(50, 52, 60) : Color.FromArgb(36, 38, 46);
+            using (SolidBrush rb = new SolidBrush(recBg))
+            {
+                FillRoundedRect(g, rb, rectRec.X, rectRec.Y, rectRec.Width, rectRec.Height, 6);
+            }
+
+            // Record dot
+            if (isRecording)
+            {
+                if (recDotVisible)
+                {
+                    using (SolidBrush dotBrush = new SolidBrush(Color.FromArgb(244, 67, 54)))
+                    {
+                        g.FillEllipse(dotBrush, btnX, recY + 4, 10, 10);
+                    }
+                }
+                using (Font f = new Font("Segoe UI", 7.5F, FontStyle.Bold))
+                    g.DrawString("REC", f, new SolidBrush(Color.FromArgb(244, 67, 54)), btnX + 13, recY + 2);
+            }
+            else
+            {
+                using (SolidBrush dotBrush = new SolidBrush(Color.FromArgb(100, 105, 115)))
+                {
+                    g.FillEllipse(dotBrush, btnX, recY + 4, 10, 10);
+                }
+                using (Font f = new Font("Segoe UI", 7.5F, FontStyle.Bold))
+                    g.DrawString("REC", f, new SolidBrush(Color.FromArgb(130, 135, 145)), btnX + 13, recY + 2);
+            }
+
+            // === Right side: GRAPH button ===
+            int graphY = 34;
+            rectGraph = new Rectangle(btnX - 4, graphY - 2, 56, 22);
+
+            Color graphBg = hoverGraph ? Color.FromArgb(50, 52, 60) : Color.FromArgb(36, 38, 46);
+            using (SolidBrush gb = new SolidBrush(graphBg))
+            {
+                FillRoundedRect(g, gb, rectGraph.X, rectGraph.Y, rectGraph.Width, rectGraph.Height, 6);
+            }
+
+            // Mini bar chart icon
+            DrawMiniChartIcon(g, btnX + 1, graphY + 3, Color.FromArgb(33, 150, 243));
+
+            using (Font f = new Font("Segoe UI", 7.5F, FontStyle.Bold))
+                g.DrawString("LIVE", f, new SolidBrush(Color.FromArgb(33, 150, 243)), btnX + 16, graphY + 2);
+        }
+
+        private void DrawMetricBlock(Graphics g, int x, string label, string value, string unit,
+            Color accentColor, Color barColor)
+        {
+            // Header label
+            using (Font hf = new Font("Segoe UI", 6.5F, FontStyle.Bold))
+            using (SolidBrush hb = new SolidBrush(Color.FromArgb(120, 125, 135)))
+            {
+                g.DrawString(label, hf, hb, x, 8);
+            }
+
+            // Value
+            using (Font vf = new Font("Segoe UI", 12F, FontStyle.Bold))
+            using (SolidBrush vb = new SolidBrush(accentColor))
+            {
+                g.DrawString(value, vf, vb, x - 2, 20);
+            }
+
+            // Unit suffix
+            SizeF valSize;
+            using (Font vf = new Font("Segoe UI", 12F, FontStyle.Bold))
+                valSize = g.MeasureString(value, vf);
+
+            using (Font uf = new Font("Segoe UI", 7F, FontStyle.Regular))
+            using (SolidBrush ub = new SolidBrush(Color.FromArgb(100, 105, 115)))
+            {
+                g.DrawString(unit, uf, ub, x - 2 + valSize.Width - 4, 30);
+            }
+
+            // Accent bar at bottom
+            using (SolidBrush bb = new SolidBrush(barColor))
+            {
+                FillRoundedRect(g, bb, x, 50, 55, 3, 1);
+            }
+        }
+
+        private void DrawBoltIcon(Graphics g, int x, int y, Color c)
+        {
+            // Lightning bolt drawn with GDI+ polygon
+            PointF[] bolt = {
+                new PointF(x + 7, y),
+                new PointF(x + 3, y + 12),
+                new PointF(x + 7, y + 12),
+                new PointF(x + 4, y + 24),
+                new PointF(x + 12, y + 9),
+                new PointF(x + 8, y + 9),
+                new PointF(x + 11, y)
             };
-            lbl.MouseDown += Form_MouseDown;
-            lbl.MouseMove += Form_MouseMove;
-            lbl.MouseUp += Form_MouseUp;
-            return lbl;
+            using (SolidBrush b = new SolidBrush(c))
+            {
+                g.FillPolygon(b, bolt);
+            }
+        }
+
+        private void DrawMiniChartIcon(Graphics g, int x, int y, Color c)
+        {
+            // 4-bar mini chart icon
+            using (SolidBrush b = new SolidBrush(c))
+            {
+                g.FillRectangle(b, x, y + 10, 3, 4);
+                g.FillRectangle(b, x + 4, y + 6, 3, 8);
+                g.FillRectangle(b, x + 8, y + 2, 3, 12);
+                g.FillRectangle(b, x + 12, y + 5, 3, 9);
+            }
+        }
+
+        private void FillRoundedRect(Graphics g, Brush b, int x, int y, int w, int h, int r)
+        {
+            using (GraphicsPath path = new GraphicsPath())
+            {
+                path.AddArc(x, y, r * 2, r * 2, 180, 90);
+                path.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
+                path.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
+                path.CloseFigure();
+                g.FillPath(b, path);
+            }
+        }
+
+        private void DrawRoundedRect(Graphics g, Pen p, int x, int y, int w, int h, int r)
+        {
+            using (GraphicsPath path = new GraphicsPath())
+            {
+                path.AddArc(x, y, r * 2, r * 2, 180, 90);
+                path.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
+                path.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
+                path.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
+                path.CloseFigure();
+                g.DrawPath(p, path);
+            }
+        }
+
+        private void Form_MouseClick(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                if (rectRec.Contains(e.Location)) ToggleRecording();
+                else if (rectGraph.Contains(e.Location)) OpenLiveGraph();
+            }
         }
 
         private void ToggleRecording()
@@ -163,7 +321,6 @@ namespace PowerTracker
 
             if (isRecording)
             {
-                // Start Session Stream to Disk
                 string appDir = AppDomain.CurrentDomain.BaseDirectory;
                 string baseFolder = Path.Combine(appDir, "Charging Stats");
                 Directory.CreateDirectory(baseFolder);
@@ -179,32 +336,27 @@ namespace PowerTracker
                 }
                 catch { }
 
-                lblRec.Text = "🔴 REC";
-                lblRec.ForeColor = Color.Crimson;
-                itemRecord.Text = "⏹️ Stop Recording";
-                trayIcon.ShowBalloonTip(2000, "PowerTracker", "🔴 Recording session started...", ToolTipIcon.Info);
+                itemRecord.Text = "Stop Recording";
+                blinkTimer.Start();
+                trayIcon.ShowBalloonTip(2000, "PowerTracker", "Recording session started...", ToolTipIcon.Info);
             }
             else
             {
-                // Stop Session & Close Writer (DO NOT LAUNCH GRAPH)
-                lblRec.Text = "● REC";
-                lblRec.ForeColor = Color.Gray;
-                itemRecord.Text = "🔴 Start Recording";
+                itemRecord.Text = "Start Recording";
+                blinkTimer.Stop();
+                recDotVisible = true;
 
                 if (recWriter != null)
                 {
-                    try
-                    {
-                        recWriter.Flush();
-                        recWriter.Close();
-                        recWriter.Dispose();
-                    }
+                    try { recWriter.Flush(); recWriter.Close(); recWriter.Dispose(); }
                     catch { }
                     recWriter = null;
                 }
 
                 trayIcon.ShowBalloonTip(3000, "Recording Saved!", "CSV log saved to Charging Stats folder.", ToolTipIcon.Info);
             }
+
+            this.Invalidate();
         }
 
         private void OpenLiveGraph()
@@ -228,9 +380,7 @@ namespace PowerTracker
                 ofd.Filter = "CSV Log Files (*.csv)|*.csv|All Files (*.*)|*.*";
                 string defaultFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Charging Stats");
                 if (Directory.Exists(defaultFolder))
-                {
                     ofd.InitialDirectory = defaultFolder;
-                }
 
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
@@ -246,11 +396,7 @@ namespace PowerTracker
             string appDir = AppDomain.CurrentDomain.BaseDirectory;
             string graphsFolder = Path.Combine(appDir, "Charging Stats");
             Directory.CreateDirectory(graphsFolder);
-
-            try
-            {
-                System.Diagnostics.Process.Start(graphsFolder);
-            }
+            try { System.Diagnostics.Process.Start(graphsFolder); }
             catch { }
         }
 
@@ -264,53 +410,41 @@ namespace PowerTracker
                     double rawChargeRate = Convert.ToDouble(queryObj["ChargeRate"]) / 1000.0;
                     double rawDischargeRate = Convert.ToDouble(queryObj["DischargeRate"]) / 1000.0;
 
-                    double pIn = 0.0;
-                    double pOut = 0.0;
-                    double pNet = 0.0;
-
                     if (online)
                     {
-                        pNet = rawChargeRate > 0 ? rawChargeRate : 0.0;
+                        curNet = rawChargeRate > 0 ? rawChargeRate : 0.0;
                         if (rawDischargeRate > 0) lastKnownDischargeRate = rawDischargeRate;
-                        pOut = lastKnownDischargeRate;
-                        pIn = pNet + pOut;
+                        curOut = lastKnownDischargeRate;
+                        curIn = curNet + curOut;
                     }
                     else
                     {
-                        pIn = 0.0;
-                        pOut = rawDischargeRate > 0 ? rawDischargeRate : 0.0;
-                        pNet = -pOut;
-                        if (pOut > 0) lastKnownDischargeRate = pOut;
+                        curIn = 0.0;
+                        curOut = rawDischargeRate > 0 ? rawDischargeRate : 0.0;
+                        curNet = -curOut;
+                        if (curOut > 0) lastKnownDischargeRate = curOut;
                     }
 
-                    string formattedNet = String.Format("{0}{1:F1}W", (pNet > 0 ? "+" : ""), pNet);
-
-                    lblIn.Text = String.Format("{0:F1}W", pIn);
-                    lblOut.Text = String.Format("{0:F1}W", pOut);
-                    lblNet.Text = formattedNet;
-                    lblNet.ForeColor = pNet > 0 ? Color.FromArgb(76, 175, 80) : (pNet < 0 ? Color.FromArgb(244, 67, 54) : Color.Gray);
-
+                    string formattedNet = String.Format("{0}{1:F1}W", (curNet > 0 ? "+" : ""), curNet);
                     trayIcon.Text = String.Format("Power Net: {0}", formattedNet);
 
                     string currentTimeStr = DateTime.Now.ToString("HH:mm:ss");
 
-                    // Direct disk write if recording active
                     if (isRecording && recWriter != null)
                     {
                         try
                         {
                             recWriter.WriteLine(String.Format("{0},{1:F2},{2:F2},{3:F2}",
-                                currentTimeStr, pIn, pOut, pNet));
+                                currentTimeStr, curIn, curOut, curNet));
                             recWriter.Flush();
                         }
                         catch { }
                     }
 
-                    // Push live points ONLY when live graph window is open
                     if (liveGraphForm != null && !liveGraphForm.IsDisposed)
-                    {
-                        liveGraphForm.AddLivePoint(pIn, pOut, pNet, currentTimeStr);
-                    }
+                        liveGraphForm.AddLivePoint(curIn, curOut, curNet, currentTimeStr);
+
+                    this.Invalidate();
                 }
             }
             catch { }
@@ -330,20 +464,9 @@ namespace PowerTracker
             Application.Exit();
         }
 
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-
-            using (Pen pen = new Pen(Color.FromArgb(60, 60, 65), 1))
-            {
-                e.Graphics.DrawRectangle(pen, 0, 0, this.Width - 1, this.Height - 1);
-            }
-        }
-
         private void Form_MouseDown(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
+            if (e.Button == MouseButtons.Left && !rectRec.Contains(e.Location) && !rectGraph.Contains(e.Location))
             {
                 isDragging = true;
                 dragCursorPoint = System.Windows.Forms.Cursor.Position;
@@ -357,6 +480,17 @@ namespace PowerTracker
             {
                 Point dif = Point.Subtract(System.Windows.Forms.Cursor.Position, new Size(dragCursorPoint));
                 this.Location = Point.Add(dragFormPoint, new Size(dif));
+            }
+
+            // Hover tracking
+            bool newHoverRec = rectRec.Contains(e.Location);
+            bool newHoverGraph = rectGraph.Contains(e.Location);
+            if (newHoverRec != hoverRec || newHoverGraph != hoverGraph)
+            {
+                hoverRec = newHoverRec;
+                hoverGraph = newHoverGraph;
+                this.Cursor = (hoverRec || hoverGraph) ? Cursors.Hand : Cursors.Default;
+                this.Invalidate();
             }
         }
 
@@ -388,7 +522,7 @@ namespace PowerTracker
 
         public GraphForm()
         {
-            this.Text = "⚡ Power Telemetry - Live Graph (From Point of Launch)";
+            this.Text = "Power Telemetry - Live Graph";
             this.Size = new Size(960, 600);
             this.MinimumSize = new Size(700, 450);
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -415,7 +549,7 @@ namespace PowerTracker
             };
 
             btnOpenCsv = new Button {
-                Text = "📂 Open CSV...",
+                Text = "Open CSV...",
                 ForeColor = Color.White,
                 BackColor = Color.FromArgb(33, 150, 243),
                 FlatStyle = FlatStyle.Flat,
@@ -461,25 +595,25 @@ namespace PowerTracker
             chkNet.CheckedChanged += (s, e) => ToggleSeriesVisibility();
 
             btnResetZoom = new Button {
-                Text = "🔍 Reset Zoom",
+                Text = "Reset Zoom",
                 ForeColor = Color.White,
                 BackColor = Color.FromArgb(45, 45, 55),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
-                Size = new Size(110, 26),
-                Location = new Point(535, 8),
+                Size = new Size(100, 26),
+                Location = new Point(545, 8),
                 Cursor = Cursors.Hand
             };
             btnResetZoom.FlatAppearance.BorderSize = 0;
             btnResetZoom.Click += (s, e) => ResetZoom();
 
             btnExportCsv = new Button {
-                Text = "💾 Export CSV",
+                Text = "Export CSV",
                 ForeColor = Color.White,
                 BackColor = Color.FromArgb(45, 45, 55),
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
-                Size = new Size(110, 26),
+                Size = new Size(100, 26),
                 Location = new Point(655, 8),
                 Cursor = Cursors.Hand
             };
@@ -498,7 +632,7 @@ namespace PowerTracker
             };
 
             lblHoverReadout = new Label {
-                Text = "💡 Move mouse over any point on the graph to view instant telemetry values...",
+                Text = "Move mouse over graph to inspect values...",
                 ForeColor = Color.FromArgb(200, 200, 210),
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
                 Dock = DockStyle.Fill,
@@ -518,7 +652,6 @@ namespace PowerTracker
                 BackColor = Color.FromArgb(25, 25, 30)
             };
 
-            // Axes setup
             area.AxisX.LabelStyle.ForeColor = Color.FromArgb(180, 180, 180);
             area.AxisX.LabelStyle.Font = new Font("Segoe UI", 8F);
             area.AxisX.MajorGrid.LineColor = Color.FromArgb(45, 45, 52);
@@ -534,18 +667,13 @@ namespace PowerTracker
             area.AxisY.TitleForeColor = Color.FromArgb(160, 160, 170);
             area.AxisY.TitleFont = new Font("Segoe UI", 9F, FontStyle.Bold);
 
-            // Zero Baseline StripLine
             StripLine zeroLine = new StripLine {
-                Interval = 0,
-                IntervalOffset = 0,
-                StripWidth = 0,
+                Interval = 0, IntervalOffset = 0, StripWidth = 0,
                 BorderColor = Color.FromArgb(100, 100, 110),
-                BorderWidth = 1,
-                BorderDashStyle = ChartDashStyle.Dash
+                BorderWidth = 1, BorderDashStyle = ChartDashStyle.Dash
             };
             area.AxisY.StripLines.Add(zeroLine);
 
-            // Zooming, Selection & Crosshair Cursor
             area.CursorX.IsUserEnabled = true;
             area.CursorX.IsUserSelectionEnabled = true;
             area.CursorX.LineColor = Color.FromArgb(220, 0, 210, 255);
@@ -560,18 +688,15 @@ namespace PowerTracker
             chart.ChartAreas.Add(area);
             chart.MouseMove += Chart_MouseMove;
 
-            // Legend
             Legend legend = new Legend("MainLegend") {
-                BackColor = Color.Transparent,
-                ForeColor = Color.White,
+                BackColor = Color.Transparent, ForeColor = Color.White,
                 Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                Docking = Docking.Top,
-                Alignment = StringAlignment.Far
+                Docking = Docking.Top, Alignment = StringAlignment.Far
             };
             chart.Legends.Add(legend);
 
-            // Title
-            Title title = new Title("Power Telemetry - Live Graph", Docking.Top, new Font("Segoe UI", 12F, FontStyle.Bold), Color.White);
+            Title title = new Title("Power Telemetry - Live Graph", Docking.Top,
+                new Font("Segoe UI", 12F, FontStyle.Bold), Color.White);
             chart.Titles.Add(title);
 
             this.Controls.Add(chart);
@@ -585,14 +710,10 @@ namespace PowerTracker
                 ofd.Filter = "CSV Log Files (*.csv)|*.csv|All Files (*.*)|*.*";
                 string defaultFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Charging Stats");
                 if (Directory.Exists(defaultFolder))
-                {
                     ofd.InitialDirectory = defaultFolder;
-                }
 
                 if (ofd.ShowDialog() == DialogResult.OK)
-                {
                     LoadCsvFile(ofd.FileName);
-                }
             }
         }
 
@@ -600,10 +721,8 @@ namespace PowerTracker
         {
             try
             {
-                historyIn.Clear();
-                historyOut.Clear();
-                historyNet.Clear();
-                historyTime.Clear();
+                historyIn.Clear(); historyOut.Clear();
+                historyNet.Clear(); historyTime.Clear();
 
                 string[] lines = File.ReadAllLines(csvPath);
                 if (lines.Length <= 1) return;
@@ -612,27 +731,22 @@ namespace PowerTracker
                 {
                     string line = lines[i].Trim();
                     if (string.IsNullOrEmpty(line)) continue;
-
                     string[] parts = line.Split(',');
                     if (parts.Length >= 4)
                     {
-                        string t = parts[0].Trim();
                         double pIn, pOut, pNet;
-
                         if (double.TryParse(parts[1], out pIn) &&
                             double.TryParse(parts[2], out pOut) &&
                             double.TryParse(parts[3], out pNet))
                         {
-                            historyTime.Add(t);
-                            historyIn.Add(pIn);
-                            historyOut.Add(pOut);
-                            historyNet.Add(pNet);
+                            historyTime.Add(parts[0].Trim());
+                            historyIn.Add(pIn); historyOut.Add(pOut); historyNet.Add(pNet);
                         }
                     }
                 }
 
                 string fileName = Path.GetFileName(csvPath);
-                this.Text = "⚡ Power Telemetry - CSV File: " + fileName;
+                this.Text = "Power Telemetry - " + fileName;
                 if (chart.Titles.Count > 0)
                     chart.Titles[0].Text = "CSV Telemetry: " + fileName;
 
@@ -649,24 +763,16 @@ namespace PowerTracker
             try
             {
                 if (historyTime == null || historyTime.Count == 0) return;
-
                 ChartArea area = chart.ChartAreas[0];
                 double xVal = area.AxisX.PixelPositionToValue(e.X);
                 int index = (int)Math.Round(xVal) - 1;
 
                 if (index >= 0 && index < historyTime.Count)
                 {
-                    string timeStr = historyTime[index];
-                    double pIn = historyIn[index];
-                    double pOut = historyOut[index];
-                    double pNet = historyNet[index];
-
                     area.CursorX.Position = index + 1;
-
                     lblHoverReadout.Text = String.Format(
-                        "⏱️ Time: {0}   │   🟢 Power IN: {1:F2} W   │   🔴 Power OUT: {2:F2} W   │   🔵 Net Flow: {3:+0.00;-0.00;0.00} W",
-                        timeStr, pIn, pOut, pNet
-                    );
+                        "Time: {0}   |   IN: {1:F2} W   |   OUT: {2:F2} W   |   Net: {3:+0.00;-0.00;0.00} W",
+                        historyTime[index], historyIn[index], historyOut[index], historyNet[index]);
                 }
             }
             catch { }
@@ -677,53 +783,38 @@ namespace PowerTracker
             chart.Series.Clear();
 
             Series sIn = new Series("Power IN") {
-                ChartType = SeriesChartType.Spline,
-                Color = Color.FromArgb(76, 175, 80),
-                BorderWidth = 3,
-                MarkerStyle = MarkerStyle.Circle,
-                MarkerSize = 5,
+                ChartType = SeriesChartType.Spline, Color = Color.FromArgb(76, 175, 80),
+                BorderWidth = 3, MarkerStyle = MarkerStyle.Circle, MarkerSize = 5,
                 ToolTip = "Time: #VALX\nPower IN: #VALY{F2} W"
             };
-
             Series sOut = new Series("Power OUT") {
-                ChartType = SeriesChartType.Spline,
-                Color = Color.FromArgb(244, 67, 54),
-                BorderWidth = 3,
-                MarkerStyle = MarkerStyle.Circle,
-                MarkerSize = 5,
+                ChartType = SeriesChartType.Spline, Color = Color.FromArgb(244, 67, 54),
+                BorderWidth = 3, MarkerStyle = MarkerStyle.Circle, MarkerSize = 5,
                 ToolTip = "Time: #VALX\nPower OUT: #VALY{F2} W"
             };
-
             Series sNet = new Series("Net Flow") {
-                ChartType = SeriesChartType.Spline,
-                Color = Color.FromArgb(33, 150, 243),
-                BorderWidth = 3,
-                MarkerStyle = MarkerStyle.Circle,
-                MarkerSize = 5,
+                ChartType = SeriesChartType.Spline, Color = Color.FromArgb(33, 150, 243),
+                BorderWidth = 3, MarkerStyle = MarkerStyle.Circle, MarkerSize = 5,
                 ToolTip = "Time: #VALX\nNet Flow: #VALY{F2} W"
             };
 
             for (int i = 0; i < historyTime.Count; i++)
             {
-                string t = historyTime[i];
-                sIn.Points.AddXY(t, historyIn[i]);
-                sOut.Points.AddXY(t, historyOut[i]);
-                sNet.Points.AddXY(t, historyNet[i]);
+                sIn.Points.AddXY(historyTime[i], historyIn[i]);
+                sOut.Points.AddXY(historyTime[i], historyOut[i]);
+                sNet.Points.AddXY(historyTime[i], historyNet[i]);
             }
 
             chart.Series.Add(sIn);
             chart.Series.Add(sOut);
             chart.Series.Add(sNet);
-
             ToggleSeriesVisibility();
         }
 
         public void AddLivePoint(double pIn, double pOut, double pNet, string timeStr)
         {
-            historyIn.Add(pIn);
-            historyOut.Add(pOut);
-            historyNet.Add(pNet);
-            historyTime.Add(timeStr);
+            historyIn.Add(pIn); historyOut.Add(pOut);
+            historyNet.Add(pNet); historyTime.Add(timeStr);
 
             if (chart.Series.Count >= 3)
             {
@@ -737,17 +828,10 @@ namespace PowerTracker
         {
             try
             {
-                if (chart.Series.IndexOf("Power IN") != -1)
-                    chart.Series["Power IN"].Enabled = chkIn.Checked;
-
-                if (chart.Series.IndexOf("Power OUT") != -1)
-                    chart.Series["Power OUT"].Enabled = chkOut.Checked;
-
-                if (chart.Series.IndexOf("Net Flow") != -1)
-                    chart.Series["Net Flow"].Enabled = chkNet.Checked;
-
-                chart.Invalidate();
-                chart.Update();
+                if (chart.Series.IndexOf("Power IN") != -1) chart.Series["Power IN"].Enabled = chkIn.Checked;
+                if (chart.Series.IndexOf("Power OUT") != -1) chart.Series["Power OUT"].Enabled = chkOut.Checked;
+                if (chart.Series.IndexOf("Net Flow") != -1) chart.Series["Net Flow"].Enabled = chkNet.Checked;
+                chart.Invalidate(); chart.Update();
             }
             catch { }
         }
@@ -775,10 +859,8 @@ namespace PowerTracker
             {
                 sw.WriteLine("Time,PowerIn_W,PowerOut_W,NetFlow_W");
                 for (int i = 0; i < historyTime.Count; i++)
-                {
-                    sw.WriteLine(String.Format("{0},{1:F2},{2:F2},{3:F2}", 
+                    sw.WriteLine(String.Format("{0},{1:F2},{2:F2},{3:F2}",
                         historyTime[i], historyIn[i], historyOut[i], historyNet[i]));
-                }
             }
 
             MessageBox.Show("CSV exported to:\n" + csvPath, "PowerTracker", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -794,9 +876,7 @@ namespace PowerTracker
         {
             string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
             if (files != null && files.Length > 0 && files[0].EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-            {
                 LoadCsvFile(files[0]);
-            }
         }
     }
 }
