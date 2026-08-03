@@ -13,6 +13,8 @@ namespace PowerTracker
         private ManagementObjectSearcher searcher;
         private NotifyIcon trayIcon;
 
+        private double lastKnownDischargeRate = 12.0; // Default baseline estimate when plugged in
+
         // Dragging Variables
         private bool isDragging = false;
         private Point dragCursorPoint;
@@ -25,21 +27,21 @@ namespace PowerTracker
             this.Size = new Size(220, 50);
             this.FormBorderStyle = FormBorderStyle.None;
             this.TopMost = true;
-            this.ShowInTaskbar = false; // Hidden from main taskbar
+            this.ShowInTaskbar = false;
             this.BackColor = Color.FromArgb(20, 20, 20);
             this.Opacity = 0.90;
             this.DoubleBuffered = true;
 
-            // Position at Bottom-Right of Primary Screen
+            // Position at Bottom-Right of Screen
             Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
             this.Location = new Point(workingArea.Right - this.Width - 20, workingArea.Bottom - this.Height - 20);
 
-            // Dragging handlers
+            // Dragging Handlers
             this.MouseDown += Form_MouseDown;
             this.MouseMove += Form_MouseMove;
             this.MouseUp += Form_MouseUp;
 
-            // --- Compact Inline Layout ---
+            // --- UI Layout ---
             Label hIn = CreateHeaderLabel("IN", 12, 8);
             lblIn = CreateValueLabel("0.0W", 12, 22, Color.FromArgb(76, 175, 80));
 
@@ -49,7 +51,7 @@ namespace PowerTracker
             Label hNet = CreateHeaderLabel("NET", 144, 8);
             lblNet = CreateValueLabel("0.0W", 144, 22, Color.FromArgb(33, 150, 243));
 
-            // Right-Click Context Menu for both Widget and Tray Icon
+            // Context Menu
             ContextMenu ctx = new ContextMenu();
             ctx.MenuItems.Add("Toggle Widget", (s, e) => { this.Visible = !this.Visible; });
             ctx.MenuItems.Add("Snap to Corner", (s, e) => SnapToCorner());
@@ -58,24 +60,24 @@ namespace PowerTracker
 
             this.ContextMenu = ctx;
 
-            // --- System Tray Icon (Collapsed Icons Area) ---
+            // System Tray
             trayIcon = new NotifyIcon();
-            trayIcon.Icon = SystemIcons.Application; // Default Windows App Icon
+            trayIcon.Icon = SystemIcons.Application;
             trayIcon.Text = "Power Telemetry Widget";
             trayIcon.ContextMenu = ctx;
-            trayIcon.Visible = true; // Makes it appear in the tray!
+            trayIcon.Visible = true;
             trayIcon.DoubleClick += (s, e) => { this.Visible = !this.Visible; };
 
             this.Controls.AddRange(new Control[] { hIn, hOut, hNet, lblIn, lblOut, lblNet });
 
-            // Initialize Telemetry
+            // Initialize WMI
             try
             {
                 searcher = new ManagementObjectSearcher("root\\wmi", "SELECT * FROM BatteryStatus");
             }
             catch { }
 
-            // Refresh Loop
+            // Timer Loop
             timer = new Timer();
             timer.Interval = 1000;
             timer.Tick += UpdateTelemetry;
@@ -121,12 +123,40 @@ namespace PowerTracker
                 foreach (ManagementObject queryObj in searcher.Get())
                 {
                     bool online = Convert.ToBoolean(queryObj["PowerOnline"]);
-                    double chargeRate = Convert.ToDouble(queryObj["ChargeRate"]) / 1000.0;
-                    double dischargeRate = Convert.ToDouble(queryObj["DischargeRate"]) / 1000.0;
+                    double rawChargeRate = Convert.ToDouble(queryObj["ChargeRate"]) / 1000.0;
+                    double rawDischargeRate = Convert.ToDouble(queryObj["DischargeRate"]) / 1000.0;
 
-                    double pIn = online ? (chargeRate > 0 ? chargeRate : 0.0) : 0.0;
-                    double pOut = dischargeRate > 0 ? dischargeRate : 0.0;
-                    double pNet = online ? (pIn - pOut) : -pOut;
+                    double pIn = 0.0;
+                    double pOut = 0.0;
+                    double pNet = 0.0;
+
+                    if (online)
+                    {
+                        // PLUGGED IN MODE:
+                        // Net flow to battery is raw ChargeRate
+                        pNet = rawChargeRate > 0 ? rawChargeRate : 0.0;
+
+                        // Track discharge rate if available, otherwise use last known value
+                        if (rawDischargeRate > 0)
+                        {
+                            lastKnownDischargeRate = rawDischargeRate;
+                        }
+
+                        pOut = lastKnownDischargeRate;
+                        pIn = pNet + pOut; // Total Power Provided by Charger
+                    }
+                    else
+                    {
+                        // ON BATTERY MODE:
+                        pIn = 0.0;
+                        pOut = rawDischargeRate > 0 ? rawDischargeRate : 0.0;
+                        pNet = -pOut;
+                        
+                        if (pOut > 0)
+                        {
+                            lastKnownDischargeRate = pOut; // Cache for when charger is plugged back in
+                        }
+                    }
 
                     string formattedNet = String.Format("{0}{1:F1}W", (pNet > 0 ? "+" : ""), pNet);
 
@@ -135,7 +165,6 @@ namespace PowerTracker
                     lblNet.Text = formattedNet;
                     lblNet.ForeColor = pNet > 0 ? Color.FromArgb(76, 175, 80) : (pNet < 0 ? Color.FromArgb(244, 67, 54) : Color.Gray);
 
-                    // Update System Tray Tooltip on Hover
                     trayIcon.Text = String.Format("Power Net: {0}", formattedNet);
                 }
             }
