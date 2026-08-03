@@ -1,4 +1,4 @@
-# ⚡ PowerTracker
+# PowerTracker
 
 A lightweight, zero-dependency Windows desktop widget and system tray utility that displays real-time battery power telemetry (**Power In**, **Power Out**, and **Net Flow** in Watts).
 
@@ -6,7 +6,7 @@ Designed specifically for monitoring charger performance, USB-C PD negotiations,
 
 ---
 
-## ✨ Features
+## Features
 
 * **Ultra Lightweight:** ~12 KB executable compiled natively against the Windows .NET Framework.
 * **Low Resource Usage:** Uses `< 15 MB` RAM and `0.0%` idle CPU.
@@ -16,7 +16,7 @@ Designed specifically for monitoring charger performance, USB-C PD negotiations,
 
 ---
 
-## 🛠️ Building & Installation
+## Building & Installation
 
 No Visual Studio installation required! PowerTracker uses the built-in C# compiler (`csc.exe`) included with Windows.
 
