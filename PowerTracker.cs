@@ -37,9 +37,15 @@ namespace PowerTracker
         // Hit-test regions for clickable icons
         private Rectangle rectRec = Rectangle.Empty;
         private Rectangle rectGraph = Rectangle.Empty;
+        private Rectangle rectPos = Rectangle.Empty;
 
         // Hover tracking
-        private bool hoverRec = false, hoverGraph = false;
+        private bool hoverRec = false, hoverGraph = false, hoverPos = false;
+
+        // Expand / collapse state
+        private bool isExpanded = false;
+        private Size compactSize = new Size(300, 62);
+        private Size expandedSize = new Size(300, 110);
 
         // Blink timer for recording indicator
         private Timer blinkTimer;
@@ -166,9 +172,14 @@ namespace PowerTracker
             DrawMetricBlock(g, col3X, "NET", String.Format("{0}{1:F1}", netPrefix, curNet), "W",
                 netColor, Color.FromArgb(40, netColor));
 
+            // === Position kebab button (⋮) ===
+            int posX = 232, posY = 20;
+            rectPos = new Rectangle(posX - 4, posY - 14, 16, 36);
+            DrawKebabIcon(g, posX, posY, hoverPos);
+
             // === Right side: REC button ===
-            int btnX = 244, recY = 8;
-            rectRec = new Rectangle(btnX - 4, recY - 2, 56, 22);
+            int btnX = 250, recY = 8;
+            rectRec = new Rectangle(btnX - 4, recY - 2, 52, 22);
 
             Color recBg = hoverRec ? Color.FromArgb(50, 52, 60) : Color.FromArgb(36, 38, 46);
             using (SolidBrush rb = new SolidBrush(recBg))
@@ -201,7 +212,7 @@ namespace PowerTracker
 
             // === Right side: GRAPH button ===
             int graphY = 34;
-            rectGraph = new Rectangle(btnX - 4, graphY - 2, 56, 22);
+            rectGraph = new Rectangle(btnX - 4, graphY - 2, 52, 22);
 
             Color graphBg = hoverGraph ? Color.FromArgb(50, 52, 60) : Color.FromArgb(36, 38, 46);
             using (SolidBrush gb = new SolidBrush(graphBg))
@@ -209,11 +220,59 @@ namespace PowerTracker
                 FillRoundedRect(g, gb, rectGraph.X, rectGraph.Y, rectGraph.Width, rectGraph.Height, 6);
             }
 
-            // Mini bar chart icon
             DrawMiniChartIcon(g, btnX + 1, graphY + 3, Color.FromArgb(33, 150, 243));
 
             using (Font f = new Font("Segoe UI", 7.5F, FontStyle.Bold))
                 g.DrawString("LIVE", f, new SolidBrush(Color.FromArgb(33, 150, 243)), btnX + 16, graphY + 2);
+
+            // === Expanded section ===
+            if (isExpanded)
+            {
+                int ey = 62;
+                // Separator line
+                using (Pen sep = new Pen(Color.FromArgb(45, 50, 60), 1))
+                {
+                    g.DrawLine(sep, 12, ey, w - 12, ey);
+                }
+
+                // Status info in expanded area
+                using (Font sf = new Font("Segoe UI", 8F, FontStyle.Bold))
+                {
+                    Color chargingColor = isCharging ? Color.FromArgb(76, 175, 80) : Color.FromArgb(244, 67, 54);
+                    string statusText = isCharging ? "CHARGING" : "ON BATTERY";
+                    g.DrawString(statusText, sf, new SolidBrush(chargingColor), 14, ey + 6);
+
+                    string recStatus = isRecording ? "REC: ON" : "REC: OFF";
+                    Color recStatusColor = isRecording ? Color.FromArgb(244, 67, 54) : Color.FromArgb(100, 105, 115);
+                    g.DrawString(recStatus, sf, new SolidBrush(recStatusColor), 110, ey + 6);
+
+                    string topStatus = this.TopMost ? "PINNED" : "UNPINNED";
+                    Color topColor = this.TopMost ? Color.FromArgb(255, 193, 7) : Color.FromArgb(100, 105, 115);
+                    g.DrawString(topStatus, sf, new SolidBrush(topColor), 190, ey + 6);
+                }
+
+                // Efficiency bar (Net / In ratio when charging)
+                int barY = ey + 26;
+                using (Font lf = new Font("Segoe UI", 7F, FontStyle.Regular))
+                {
+                    g.DrawString("Efficiency", lf, new SolidBrush(Color.FromArgb(100, 105, 115)), 14, barY);
+                }
+                int barX = 74, barW = 200, barH = 6;
+                using (SolidBrush bgBar = new SolidBrush(Color.FromArgb(35, 38, 48)))
+                {
+                    FillRoundedRect(g, bgBar, barX, barY + 2, barW, barH, 3);
+                }
+                double efficiency = (curIn > 0.1) ? Math.Max(0, Math.Min(1, (curIn - curOut) / curIn)) : 0;
+                int fillW = (int)(barW * efficiency);
+                if (fillW > 0)
+                {
+                    Color effColor = efficiency > 0.5 ? Color.FromArgb(76, 175, 80) : Color.FromArgb(255, 193, 7);
+                    using (SolidBrush fillBar = new SolidBrush(effColor))
+                    {
+                        FillRoundedRect(g, fillBar, barX, barY + 2, fillW, barH, 3);
+                    }
+                }
+            }
         }
 
         private void DrawMetricBlock(Graphics g, int x, string label, string value, string unit,
@@ -305,13 +364,23 @@ namespace PowerTracker
 
         private void DrawMiniChartIcon(Graphics g, int x, int y, Color c)
         {
-            // 4-bar mini chart icon
             using (SolidBrush b = new SolidBrush(c))
             {
                 g.FillRectangle(b, x, y + 10, 3, 4);
                 g.FillRectangle(b, x + 4, y + 6, 3, 8);
                 g.FillRectangle(b, x + 8, y + 2, 3, 12);
                 g.FillRectangle(b, x + 12, y + 5, 3, 9);
+            }
+        }
+
+        private void DrawKebabIcon(Graphics g, int x, int y, bool hover)
+        {
+            Color dotColor = hover ? Color.FromArgb(200, 205, 215) : Color.FromArgb(110, 115, 125);
+            using (SolidBrush b = new SolidBrush(dotColor))
+            {
+                g.FillEllipse(b, x, y - 8, 5, 5);
+                g.FillEllipse(b, x, y,     5, 5);
+                g.FillEllipse(b, x, y + 8, 5, 5);
             }
         }
 
@@ -347,7 +416,33 @@ namespace PowerTracker
             {
                 if (rectRec.Contains(e.Location)) ToggleRecording();
                 else if (rectGraph.Contains(e.Location)) OpenLiveGraph();
+                else if (rectPos.Contains(e.Location)) ShowPositionMenu(e.Location);
             }
+        }
+
+        private void ShowPositionMenu(Point loc)
+        {
+            ContextMenu posMenu = new ContextMenu();
+
+            string expandText = isExpanded ? "Collapse" : "Expand";
+            posMenu.MenuItems.Add(expandText, (s, ev) => ToggleExpand());
+            posMenu.MenuItems.Add("Minimize to Tray", (s, ev) => { this.Visible = false; });
+
+            string pinText = this.TopMost ? "Send to Back (Unpin)" : "Bring to Front (Pin)";
+            posMenu.MenuItems.Add(pinText, (s, ev) => { this.TopMost = !this.TopMost; this.Invalidate(); });
+
+            posMenu.MenuItems.Add("-");
+            posMenu.MenuItems.Add("Snap to Corner", (s, ev) => SnapToCorner());
+
+            posMenu.Show(this, loc);
+        }
+
+        private void ToggleExpand()
+        {
+            isExpanded = !isExpanded;
+            this.Size = isExpanded ? expandedSize : compactSize;
+            this.Region = CreateRoundedRegion(this.Width, this.Height, 12);
+            this.Invalidate();
         }
 
         private void ToggleRecording()
@@ -503,7 +598,7 @@ namespace PowerTracker
 
         private void Form_MouseDown(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left && !rectRec.Contains(e.Location) && !rectGraph.Contains(e.Location))
+            if (e.Button == MouseButtons.Left && !rectRec.Contains(e.Location) && !rectGraph.Contains(e.Location) && !rectPos.Contains(e.Location))
             {
                 isDragging = true;
                 dragCursorPoint = System.Windows.Forms.Cursor.Position;
@@ -522,11 +617,13 @@ namespace PowerTracker
             // Hover tracking
             bool newHoverRec = rectRec.Contains(e.Location);
             bool newHoverGraph = rectGraph.Contains(e.Location);
-            if (newHoverRec != hoverRec || newHoverGraph != hoverGraph)
+            bool newHoverPos = rectPos.Contains(e.Location);
+            if (newHoverRec != hoverRec || newHoverGraph != hoverGraph || newHoverPos != hoverPos)
             {
                 hoverRec = newHoverRec;
                 hoverGraph = newHoverGraph;
-                this.Cursor = (hoverRec || hoverGraph) ? Cursors.Hand : Cursors.Default;
+                hoverPos = newHoverPos;
+                this.Cursor = (hoverRec || hoverGraph || hoverPos) ? Cursors.Hand : Cursors.Default;
                 this.Invalidate();
             }
         }
