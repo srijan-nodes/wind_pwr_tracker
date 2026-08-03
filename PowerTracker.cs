@@ -32,6 +32,7 @@ namespace PowerTracker
 
         // Current telemetry values for painting
         private double curIn = 0, curOut = 0, curNet = 0;
+        private bool isCharging = false;
 
         // Hit-test regions for clickable icons
         private Rectangle rectRec = Rectangle.Empty;
@@ -145,8 +146,8 @@ namespace PowerTracker
                 DrawRoundedRect(g, borderPen, 0, 0, w - 1, h - 1, 12);
             }
 
-            // --- Left accent: tiny bolt icon ---
-            DrawBoltIcon(g, 8, 16, Color.FromArgb(255, 193, 7));
+            // --- Left accent: bolt icon (lights up when charging) ---
+            DrawBoltIcon(g, 6, 10, isCharging);
 
             // === METRIC: Power IN ===
             int col1X = 26;
@@ -250,21 +251,55 @@ namespace PowerTracker
             }
         }
 
-        private void DrawBoltIcon(Graphics g, int x, int y, Color c)
+        private void DrawBoltIcon(Graphics g, int x, int y, bool charging)
         {
-            // Lightning bolt drawn with GDI+ polygon
+            // Refined lightning bolt shape
             PointF[] bolt = {
-                new PointF(x + 7, y),
-                new PointF(x + 3, y + 12),
-                new PointF(x + 7, y + 12),
-                new PointF(x + 4, y + 24),
-                new PointF(x + 12, y + 9),
-                new PointF(x + 8, y + 9),
-                new PointF(x + 11, y)
+                new PointF(x + 10, y),
+                new PointF(x + 4,  y + 16),
+                new PointF(x + 9,  y + 16),
+                new PointF(x + 3,  y + 36),
+                new PointF(x + 15, y + 14),
+                new PointF(x + 10, y + 14),
+                new PointF(x + 14, y)
             };
-            using (SolidBrush b = new SolidBrush(c))
+
+            if (charging)
             {
-                g.FillPolygon(b, bolt);
+                // Outer glow layer
+                using (Pen glowPen = new Pen(Color.FromArgb(60, 255, 193, 7), 5))
+                {
+                    glowPen.LineJoin = LineJoin.Round;
+                    g.DrawPolygon(glowPen, bolt);
+                }
+
+                // Bright fill
+                using (LinearGradientBrush fill = new LinearGradientBrush(
+                    new Point(x, y), new Point(x, y + 36),
+                    Color.FromArgb(255, 235, 59), Color.FromArgb(255, 160, 0)))
+                {
+                    g.FillPolygon(fill, bolt);
+                }
+
+                // Crisp edge
+                using (Pen edgePen = new Pen(Color.FromArgb(180, 255, 193, 7), 1))
+                {
+                    edgePen.LineJoin = LineJoin.Round;
+                    g.DrawPolygon(edgePen, bolt);
+                }
+            }
+            else
+            {
+                // Dim / off state
+                using (SolidBrush dimBrush = new SolidBrush(Color.FromArgb(50, 55, 65)))
+                {
+                    g.FillPolygon(dimBrush, bolt);
+                }
+                using (Pen dimPen = new Pen(Color.FromArgb(65, 70, 80), 1))
+                {
+                    dimPen.LineJoin = LineJoin.Round;
+                    g.DrawPolygon(dimPen, bolt);
+                }
             }
         }
 
@@ -409,6 +444,8 @@ namespace PowerTracker
                     bool online = Convert.ToBoolean(queryObj["PowerOnline"]);
                     double rawChargeRate = Convert.ToDouble(queryObj["ChargeRate"]) / 1000.0;
                     double rawDischargeRate = Convert.ToDouble(queryObj["DischargeRate"]) / 1000.0;
+
+                    isCharging = online;
 
                     if (online)
                     {
